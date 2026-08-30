@@ -1037,6 +1037,20 @@ async def handle_oauth_callback(
             connection_data.credentials, acc_data.external_id, None
         )
         for txn_data in transactions_data:
+            # Providers should return each external transaction once, but an
+            # upstream pagination bug can repeat a page. Check the database as
+            # a second line of defence so initial account setup cannot insert
+            # duplicate (account_id, external_id) rows from one response.
+            if txn_data.external_id:
+                existing = await session.execute(
+                    select(Transaction).where(
+                        Transaction.account_id == account.id,
+                        Transaction.external_id == txn_data.external_id,
+                    )
+                )
+                if existing.scalars().first():
+                    continue
+
             # Pending↔posted twin (and the credit-card installment variant).
             # When the same logical operation comes back under a new external
             # id with a different status, fingerprint match prevents the
