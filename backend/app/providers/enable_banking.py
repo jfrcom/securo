@@ -164,21 +164,24 @@ def _txn_fingerprint(account_uid: str, raw: dict) -> str:
     return digest[:32]
 
 
-def _extract_payee(raw: dict, indicator: str, source: str) -> Optional[str]:
-    """Pick a payee name from EB transaction payload.
+def _counterparty_name(raw: dict, indicator: str) -> Optional[str]:
+    """Pick the transaction counterparty from an EB payload.
 
     DBIT (money out): creditor (the recipient).
     CRDT (money in): debtor (the sender).
     """
-    if source == "none":
-        return None
     creditor = (raw.get("creditor") or {}).get("name") or raw.get("creditor_name")
     debtor = (raw.get("debtor") or {}).get("name") or raw.get("debtor_name")
+    return (creditor or debtor) if indicator == "DBIT" else (debtor or creditor)
+
+
+def _extract_payee(raw: dict, indicator: str, source: str) -> Optional[str]:
+    """Pick a payee name while respecting the connection's payee setting."""
+    if source == "none":
+        return None
     if source == "description":
         return None  # let description carry the info
-    if indicator == "DBIT":
-        return creditor or debtor
-    return debtor or creditor
+    return _counterparty_name(raw, indicator)
 
 
 class EnableBankingProvider(BankProvider):
@@ -625,6 +628,8 @@ class EnableBankingProvider(BankProvider):
         description = _join_remittance(raw.get("remittance_information")) or (
             raw.get("additional_information") or ""
         )
+        if not description:
+            description = _counterparty_name(raw, indicator) or ""
         description = description.strip()[:500] or "Transaction"
         external_id = (raw.get("entry_reference") or "").strip() or _txn_fingerprint(
             account_uid, raw

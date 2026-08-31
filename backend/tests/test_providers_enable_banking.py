@@ -449,6 +449,102 @@ async def test_get_transactions_parses_nested_and_flat_shapes(eb_keys):
     assert {t.status for t in flat} == {"posted", "pending"}
 
 
+@pytest.mark.parametrize(
+    ("indicator", "counterparties", "expected"),
+    [
+        ("DBIT", {"creditor": {"name": "Example Merchant"}}, "Example Merchant"),
+        ("CRDT", {"debtor": {"name": "Example Sender"}}, "Example Sender"),
+        # Some banks only provide the opposite party or legacy flat fields.
+        ("DBIT", {"debtor": {"name": "Fallback Debtor"}}, "Fallback Debtor"),
+        ("CRDT", {"creditor_name": "Fallback Creditor"}, "Fallback Creditor"),
+    ],
+)
+def test_transaction_description_falls_back_to_counterparty(indicator, counterparties, expected):
+    provider = EnableBankingProvider()
+    raw = {
+        "entry_reference": f"ref-{indicator}",
+        "transaction_amount": {"amount": "12.34", "currency": "EUR"},
+        "credit_debit_indicator": indicator,
+        "booking_date": "2026-08-20",
+        "remittance_information": [],
+        **counterparties,
+    }
+
+    transaction = provider._build_transaction("account-1", raw, "posted", payee_source="auto")
+
+    assert transaction is not None
+    assert transaction.description == expected
+    assert transaction.payee == expected
+
+
+@pytest.mark.parametrize(
+    ("remittance", "additional", "expected"),
+    [
+        (["Invoice 123"], "Bank details", "Invoice 123"),
+        ([], "Bank details", "Bank details"),
+        ([], "", "Example Merchant"),
+    ],
+)
+def test_transaction_description_fallback_precedence(remittance, additional, expected):
+    provider = EnableBankingProvider()
+    transaction = provider._build_transaction(
+        "account-1",
+        {
+            "entry_reference": "ref-precedence",
+            "transaction_amount": {"amount": "12.34", "currency": "EUR"},
+            "credit_debit_indicator": "DBIT",
+            "booking_date": "2026-08-20",
+            "remittance_information": remittance,
+            "additional_information": additional,
+            "creditor": {"name": "Example Merchant"},
+        },
+        "posted",
+        payee_source="auto",
+    )
+
+    assert transaction is not None
+    assert transaction.description == expected
+
+
+def test_counterparty_description_fallback_is_independent_of_payee_setting():
+    provider = EnableBankingProvider()
+    transaction = provider._build_transaction(
+        "account-1",
+        {
+            "entry_reference": "ref-no-payee",
+            "transaction_amount": {"amount": "12.34", "currency": "EUR"},
+            "credit_debit_indicator": "DBIT",
+            "booking_date": "2026-08-20",
+            "creditor": {"name": "Example Merchant"},
+        },
+        "posted",
+        payee_source="none",
+    )
+
+    assert transaction is not None
+    assert transaction.description == "Example Merchant"
+    assert transaction.payee is None
+
+
+def test_transaction_description_remains_generic_without_meaningful_data():
+    provider = EnableBankingProvider()
+    transaction = provider._build_transaction(
+        "account-1",
+        {
+            "entry_reference": "ref-generic",
+            "transaction_amount": {"amount": "12.34", "currency": "EUR"},
+            "credit_debit_indicator": "DBIT",
+            "booking_date": "2026-08-20",
+            "remittance_information": [],
+        },
+        "posted",
+        payee_source="auto",
+    )
+
+    assert transaction is not None
+    assert transaction.description == "Transaction"
+
+
 @pytest.mark.asyncio
 async def test_get_transactions_stops_on_repeated_continuation_key(eb_keys, caplog):
     """A provider cursor loop must not duplicate a page up to the safety cap."""
