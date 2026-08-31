@@ -149,10 +149,19 @@ def _txn_fingerprint(account_uid: str, raw: dict) -> str:
     sync layer's pending↔posted twin matcher handles that.
     """
     amount = raw.get("transaction_amount") or {}
+    booking_date = raw.get("booking_date") or ""
+    value_date = raw.get("value_date") or ""
+    # Preserve existing fingerprints whenever either established date exists.
+    # Only transaction-date-only rows need the new input.
+    fingerprint_booking_date = (
+        booking_date
+        if booking_date or value_date
+        else (raw.get("transaction_date") or "")
+    )
     parts = [
         account_uid,
-        raw.get("booking_date") or "",
-        raw.get("value_date") or "",
+        fingerprint_booking_date,
+        value_date,
         str(amount.get("amount") or ""),
         str(amount.get("currency") or ""),
         raw.get("credit_debit_indicator") or "",
@@ -622,7 +631,8 @@ class EnableBankingProvider(BankProvider):
         currency = amount_obj.get("currency") or "EUR"
         booking = _parse_iso_date(raw.get("booking_date"))
         value = _parse_iso_date(raw.get("value_date"))
-        txn_date = booking or value
+        transaction = _parse_iso_date(raw.get("transaction_date"))
+        txn_date = booking or value or transaction
         if not txn_date:
             return None
         description = _join_remittance(raw.get("remittance_information")) or (
@@ -631,8 +641,11 @@ class EnableBankingProvider(BankProvider):
         if not description:
             description = _counterparty_name(raw, indicator) or ""
         description = description.strip()[:500] or "Transaction"
-        external_id = (raw.get("entry_reference") or "").strip() or _txn_fingerprint(
-            account_uid, raw
+        entry_reference = str(raw.get("entry_reference") or "").strip()
+        external_id = (
+            entry_reference
+            if entry_reference and entry_reference != "0"
+            else _txn_fingerprint(account_uid, raw)
         )
         return TransactionData(
             external_id=external_id,
